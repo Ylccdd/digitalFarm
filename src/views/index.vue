@@ -26,8 +26,10 @@ const container = ref(null)
 const layerManger = new LayerManager()
 
 // 是否检测到有人试图越界
-let isInvadeMode = false
+const isInvadeMode = ref(false)
 let invadeClock = null
+// 新增：当前是否处于越界状态（边界变红时为true）
+const isInvading = ref(false)
 // 入侵者标记
 let invadeMarker
 
@@ -89,6 +91,33 @@ const SETTING = {
   }
 }
 
+// 新增监测面板状态
+const isMonitorCollapsed = ref(false)
+
+// 新增监测数据状态
+// 修正监测数据状态（增加有效点数统计）
+const cropStats = ref({
+  typeCount: 0,       // 有效作物种类数
+  totalYield: 0,      // 预计总产量（吨）
+  validPoints: 0      // 有效点数（used=1.0且crop非null）
+})
+
+// 新增水产状态数据（使用poolCenter.geojson）
+const aquaticStats = ref({
+  typeCount: 0,       // 已识别水产类型数
+  totalYield: 0,      // 预计水产总产量（吨）
+  validPoints: 0      // 有效监测点数（crop非null）
+})
+
+const droneStats = ref({
+  online: true // 可根据实际无人机连接状态修改
+})
+
+const productStats = ref({
+  highRatio: 0,       // 高产区占比（%）
+  totalValue: 0       // 预计年产值（万元）
+})
+
 // 地图数据提示浮窗
 var normalMarker
 
@@ -96,6 +125,7 @@ onMounted(async () => {
   await init()
   // await getPointsData()
   await initLayers()
+  await calculateMonitorStats() // 新增数据计算
   animateFn()
   // initGUI()
 })
@@ -199,11 +229,11 @@ async function initLayers() {
   await initFarmLayer()
   await initPoolLayer()
   await initWaterLayer()
-  await initBuildingLayer()
   await initDroneLayer()
   await initCropLayer()
   await initRiskLayer()
   await initProducationLayer()
+  await initBuildingLayer()
   await initServePOILayer()
 }
 function initWxLayer() {
@@ -747,6 +777,18 @@ function toggleLayer(layerId) {
       const fn = wxLayer.getVisible() ? 'hide' : 'show'
       wxLayer[fn]()
       break;
+    case 'dronLayer':  // 根据操作类型直接设置在线状态
+      const dronLayer = layerManger.findLayerById(layerId)
+      if (dronLayer) {
+        const currentVisible = (dronLayer.visible ?? dronLayer.getVisible())
+        // 执行切换操作
+        dronLayer[currentVisible ? 'hide' : 'show']()
+        // 根据操作类型设置在线状态（hide→false，show→true）
+        // console.log('currentVisible', currentVisible)
+        droneStats.value.online = !currentVisible
+        // console.log('droneStats.value.online', droneStats.value.online)
+      }
+      break;
     default:
       const layer = layerManger.findLayerById(layerId)
       if (layer) {
@@ -765,7 +807,8 @@ async function toggleInvade() {
   const map = getMap()
   const borderLayer = layerManger.findLayerById('borderLayer')  
 
-  isInvadeMode = !isInvadeMode
+  isInvadeMode.value = !isInvadeMode.value  // 更新响应式变量
+
 
   // 入侵检测范围
   let ring = []
@@ -775,7 +818,7 @@ async function toggleInvade() {
   // 当前步数
   let invadeStep = 0
   
-  if (isInvadeMode) { 
+  if (isInvadeMode.value) { 
     const borderPath =  await fetchMockData('border.geojson')
     ring = borderPath.features[0].geometry.coordinates[0]
     initInvade()
@@ -790,6 +833,8 @@ async function toggleInvade() {
       const color = isInRing(pos, ring) ? '#ff0000' : '#3dfcfc'
       if(borderLayer._color !== color){
         borderLayer.setColor(color)
+        // 根据颜色更新越界状态
+        isInvading.value = (color === '#ff0000')
       }
       
     }, 1000)
@@ -797,6 +842,8 @@ async function toggleInvade() {
   } else {
     clearInvade()
     borderLayer.setColor('#3dfcfc')
+    // 关闭检测时重置越界状态
+    isInvading.value = false
   }
 
   // 创建
@@ -1000,6 +1047,56 @@ function animateLayer(layer) {
   }
 }
 
+// 计算监测统计数据
+async function calculateMonitorStats() {
+  //农作物
+  // 1. 获取并过滤有效数据
+  const cropData = await fetchMockData('crop.geojson')
+  const validFeatures = cropData.features.filter(f => 
+    f.properties.crop !== null && 
+    f.properties.used === 1.0  // 仅统计已使用的有效区域
+  )
+
+  // 2. 计算作物种类数（去重）
+  const cropTypes = new Set(validFeatures.map(f => f.properties.crop))
+  cropStats.value.typeCount = cropTypes.size
+
+  // 3. 计算有效点数和总产量（假设每个有效点1吨）
+  cropStats.value.validPoints = validFeatures.length
+  cropStats.value.totalYield = validFeatures.length  // 可替换为实际产量字段
+
+ // 水产统计（使用poolCenter.geojson）
+ const poolData = await fetchMockData('poolCenter.geojson')
+  const validAquaticFeatures = poolData.features.filter(f => 
+    f.properties.crop !== null  // 过滤crop非null的有效数据
+  )
+  
+  // 统计水产类型（去重）
+  const aquaticTypes = new Set(validAquaticFeatures.map(f => f.properties.crop))
+  aquaticStats.value.typeCount = aquaticTypes.size
+  
+  // 有效点数（假设每个有效点对应1吨产量）
+  aquaticStats.value.validPoints = validAquaticFeatures.length
+  aquaticStats.value.totalYield = validAquaticFeatures.length  // 可替换为实际产量字段
+
+
+  // 计算高产区占比（总有效点数包含used=1.0和used=0.0）
+  const totalPoints = cropData.features.filter(f => f.properties.crop !== null).length
+  productStats.value.highRatio = totalPoints > 0 
+    ? ((cropStats.value.validPoints / totalPoints) * 100).toFixed(1) 
+    : 0
+
+  // 计算年产值（假设单价2万元/吨）
+  productStats.value.totalValue = (cropStats.value.totalYield * 2).toFixed(1)
+
+  // 新增灾害预测统计（使用riskLayer数据）
+  const riskData = await fetchMockData('fertility.geojson')
+  const highRiskFeatures = riskData.features.filter(f => f.properties.weight > 80)  // 假设weight>80为高风险
+  productStats.value.riskCount = highRiskFeatures.length
+  productStats.value.riskRatio = (highRiskFeatures.length / riskData.features.length * 100).toFixed(1)
+
+}
+
 </script>
 
 <template>
@@ -1023,6 +1120,49 @@ function animateLayer(layer) {
     </div>
 
   </div>
+
+  <!-- 新增监测面板 -->
+<div class="monitor-panel" :class="{ 'collapsed': isMonitorCollapsed }">
+  <div class="monitor-header">
+    作物监测中心
+    <span class="toggle-btn" @click="isMonitorCollapsed = !isMonitorCollapsed">
+      {{ isMonitorCollapsed ? '▶' : '◀' }}
+    </span>
+  </div>
+   <!-- 直接根据折叠状态决定内容是否渲染 -->
+   <div class="monitor-content" v-if="!isMonitorCollapsed">
+    <!-- 农作物状态监测 -->
+    <div class="monitor-item">
+      <h4>农作物状态</h4>
+      <p>已识别作物类型：{{ cropStats.typeCount }}种</p>
+      <p>预计总产量：{{ cropStats.totalYield }}吨</p>
+    </div>
+
+    <!-- 新增水产状态监测（使用poolCenter.geojson） -->
+    <div class="monitor-item">
+      <h4>水产状态</h4>
+      <p>已识别水产类型：{{ aquaticStats.typeCount }}种</p>
+      <p>预计总产量：{{ aquaticStats.totalYield }}吨</p>
+    </div>
+
+    <!-- 安全警告 -->
+    <div class="monitor-item">
+    <h4>安全警告</h4>
+    <p v-if="!isInvading">当前无越界风险</p>  <!-- 修改为使用isInvading状态 -->
+    <p v-else class="warning">检测到越界行为！</p>  <!-- 修改为使用isInvading状态 -->
+    <p>无人机在线状态：{{ droneStats.online ? '在线' : '离线' }}</p>
+  </div>
+
+    <!-- 经济产量 -->
+    <div class="monitor-item">
+    <h4>经济产量</h4>
+    <p>高产区占比：{{ productStats.highRatio }}%</p>
+    <p>预计年产值：{{ productStats.totalValue }}万元</p>
+    <p>高风险区域：{{ productStats.riskCount }}处（占比{{ productStats.riskRatio }}%）</p>
+  </div>
+  </div>
+</div>
+  
   <div class="topic-list">
     <div v-for="(item, key) in SETTING.topicMap" :key="key" class="item" @click="switchTopic(key)">{{ item.label }}
     </div>
@@ -1134,6 +1274,76 @@ function animateLayer(layer) {
     background-color: #16e242;
   }
 }
+
+
+// 新增监测面板样式
+.monitor-panel {
+  position: absolute;
+  top: 100px;
+  left: 20px;
+  width: 20%; 
+  min-width: 240px;
+  background-color: rgba(4, 16, 85, 0.5);
+  transition: all 0.3s ease;
+  overflow: hidden;
+
+  &.collapsed {
+    width: 60px;
+    min-width: 60px;  // 收起时最小宽度
+  }
+
+  // 修正内容区域选择器，确保直接子元素
+  > .monitor-content {
+    backdrop-filter: blur(10px);
+    padding: 1em;
+    transition: all 0.3s ease;
+    max-height: 1000px;  // 展开时足够大的高度
+
+    // 关键修改：当面板收起时，内容区域高度归零
+    .monitor-panel.collapsed & {
+      max-height: 0;
+      padding: 0;
+      overflow: hidden;  // 隐藏溢出内容
+    }
+
+    // 确保子元素高度不影响收起效果
+    .monitor-item {
+      margin-bottom: 1.5em;
+      color: #eefcff;  // 内容保持原有颜色
+      min-height: auto;
+
+      h4 {
+        color: #5CDE8E;  // 标题使用与内容不同的颜色（绿色）
+        margin-bottom: 0.5em;
+        font-weight: bold;  // 可选：加粗标题增强区分
+      }
+
+      .warning {
+        color: #FF4C2F;
+        font-weight: bold;
+      }
+    }
+  }
+
+  .monitor-header {
+    padding: 0.6em 1em;
+    color: #ffffff;  // 显式设置标题为白色
+    font-weight: bold;
+    border-bottom: 1px solid rgb(51, 79, 236);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    min-height: 40px; 
+
+    .toggle-btn {
+      cursor: pointer;
+      color: #05c5f5;
+      font-size: 1.2em;
+    }
+  }
+}
+
+
 </style>
 <style lang="scss" type="text/scss">
 .amap-info-window {
