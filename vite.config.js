@@ -8,7 +8,8 @@ export default defineConfig(({command , mode})=>{
   const env = loadEnv(mode, process.cwd())
   
   return {
-    base: env.VITE_APP_BASEURL,
+    //base: env.VITE_APP_BASEURL,
+    base:'/digitalFarm/',
     plugins: [
       vue(),
       AutoImport({
