@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "build:local": "vite build --mode private",
-    "deploy": "gh-pages -d dist -r git@github.com:ylccdd/digitalFarm.git",
+    "deploy": "gh-pages -d dist -r git@github.com:ylccdd/digitalFarm.git -b gh-pages",
     "preview": "vite preview"
   },
   "dependencies": {
