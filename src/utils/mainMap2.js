@@ -1,5 +1,5 @@
 let mainMap = null
-const AMAP_KEY = '8281b6b8f40890205d2a2755b52dbfee'
+const AMAP_KEY = '399387e1ce1bcb4c4544abfa698b929f'
 
 // 默认开启WebGL
 // window.forceWebGL = true
