@@ -6,6 +6,7 @@ import * as THREE from 'three'
 import CropLayer from '@/components/map/cropLayer.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import * as dat from 'dat.gui'
+import HeaderTitle from '@/components/HeaderTitle.vue'
 
 const {
   PolygonLayer,
@@ -1100,6 +1101,7 @@ async function calculateMonitorStats() {
 </script>
 
 <template>
+  <HeaderTitle />
   <div ref="container" class="container"></div>
   <div class="tool">
     <!-- <button @click="toggleLayer('wx')">卫星影像</button>
